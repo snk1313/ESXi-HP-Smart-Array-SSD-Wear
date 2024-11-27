@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<zabbix_export>
+    <version>5.2</version>
+    <date>2024-11-20T14:59:37Z</date>
+    <groups>
+        <group>
+            <name>Templates</name>
+        </group>
+    </groups>
+    <templates>
+        <template>
+            <template>Template ESXi HP Smart Array SSD Wear 1 TBW</template>
+            <name>Template ESXi HP Smart Array SSD Wear 1 TBW</name>
+            <groups>
+                <group>
+                    <name>Templates</name>
+                </group>
+            </groups>
+            <applications>
+                <application>
+                    <name>HP Smart Array Wear</name>
+                </application>
+            </applications>
+            <items>
+                <item>
+                    <name>Smart Array: Data Retrieval</name>
+                    <type>SSH</type>
+                    <key>ssh.run[hpraid.data.retrieval]</key>
+                    <delay>3600</delay>
+                    <trends>0</trends>
+                    <value_type>TEXT</value_type>
+                    <params>#enumerate-variables
+adudiag_dir="/tmp/adudiag"
+adudiag_extract="/tmp/adureport.extract"
+ssdwear_list_tmp="/tmp/ssdwear.list.tmp"
+weardata_tmp="/tmp/ssdweardata.tmp"
+weardata_out="/tmp/ssdweardata.out"
+hpacucli="/opt/smartstorageadmin/ssacli/bin/ssacli"
+ctrl_list=$(${hpacucli} ctrl all show |grep -oE 'Slot [0-9]+.*?' |awk '{print $2}' |xargs echo)
+
+#create-adudiag-dir
+mkdir $adudiag_dir
+rm -rf $weardata_out
+
+
+
+#dump-diag-report-and-unzip-it
+for slot in $ctrl_list;
+  do
+	$hpacucli ctrl slot=$slot diag file=$adudiag_dir/adudiag_$slot.zip
+  done
+echo "Adudiag report $adudiag_dir/adudiag_$slot.zip created"
+
+
+mkdir /tmp/adudiag/adudiag_$slot
+echo "unzipping $adudiag_dir/adudiag_$slot.zip to $adudiag_dir/adudiag_$slot"
+unzip $adudiag_dir/adudiag_$slot.zip -d $adudiag_dir/adudiag_$slot
+
+
+#extract-ssd-wear-information-from-adu-report
+grep -A10 "Workload Information" /tmp/adudiag/adudiag_$slot/ADUReport.txt > $adudiag_extract
+grep -E '.I:.:.|Total Bytes Written' $adudiag_extract > $ssdwear_list_tmp
+
+
+rm -rf $adudiag_dir
+rm -rf $adudiag_extract
+
+
+#create-status-file-based-on-ssacli-output
+echo -n > $weardata_tmp
+
+
+# enumerate all adapters and all physical drives on each adapter.
+echo "### pd section begin ###" >> $weardata_tmp
+for slot in $ctrl_list;
+  do
+    pd_list=$($hpacucli ctrl slot=$slot pd all show |grep -w physicaldrive |awk '{print $2}' |xargs echo)
+  for pd in $pd_list;
+    do
+      echo "### pd begin $slot $pd ###" >> $weardata_tmp
+      grep -A1 "$pd" $ssdwear_list_tmp | grep -v "$pd" >> $weardata_tmp
+      echo "### pd end $slot $pd ###" >> $weardata_tmp
+    done
+  done
+echo "### pd section end ###" >> $weardata_tmp
+
+
+mv $weardata_tmp $weardata_out
+rm -rf $ssdwear_list_tmp
+
+
+echo "OK"</params>
+                    <username>{$ZABBIX_SSH_USER}</username>
+                    <password>{$ZABBIX_SSH_PASS}</password>
+                    <applications>
+                        <application>
+                            <name>HP Smart Array Wear</name>
+                        </application>
+                    </applications>
+                </item>
+            </items>
+            <discovery_rules>
+                <discovery_rule>
+                    <name>Physical Drives Discovery</name>
+                    <type>SSH</type>
+                    <key>ssh.run[hpraid.pd.discovery]</key>
+                    <delay>3600</delay>
+                    <params>data="/tmp/ssdweardata.out"
+
+if [ -f $data ]; then
+  pd_list=$(sed -n -e '/pd section begin/,/pd section end/p' $data |grep -w 'pd begin' |awk '{OFS=":"} {print $4,$5}')
+  else echo "$data not found."; exit 1
+fi
+
+echo -n '{"data":['
+  for pd in $pd_list; do echo -n "{\"{#PD}\":\"$pd\"},"; done |sed -e 's:\},$:\}:'
+echo -n ']}'</params>
+                    <username>{$ZABBIX_SSH_USER}</username>
+                    <password>{$ZABBIX_SSH_PASS}</password>
+                    <filter>
+                        <conditions>
+                            <condition>
+                                <macro>{#PD}</macro>
+                                <formulaid>A</formulaid>
+                            </condition>
+                        </conditions>
+                    </filter>
+                    <lifetime>0</lifetime>
+                    <item_prototypes>
+                        <item_prototype>
+                            <name>SSD {#PD} TBW</name>
+                            <type>SSH</type>
+                            <key>ssh.run[hpraid.pd.wear.{#PD}]</key>
+                            <delay>3600</delay>
+                            <history>30d</history>
+                            <value_type>FLOAT</value_type>
+                            <params>slot=$(echo "{#PD}" | cut -d ":" -f 1)
+pd=$(echo "{#PD}" | cut -d ":" -f 2-)
+sed -n -e "/pd begin $slot $pd/,/pd end $slot $pd/p" /tmp/ssdweardata.out |grep -wE '[ ]+Total Bytes Written \(TB\)' |awk '{print $5}'</params>
+                            <username>{$ZABBIX_SSH_USER}</username>
+                            <password>{$ZABBIX_SSH_PASS}</password>
+                            <applications>
+                                <application>
+                                    <name>HP Smart Array Wear</name>
+                                </application>
+                            </applications>
+                            <trigger_prototypes>
+                                <trigger_prototype>
+                                    <expression>{last()}>1</expression>
+                                    <name>Smart Array: SSD {#PD} Wear is more than {ITEM.LASTVALUE} on {HOSTNAME}</name>
+                                    <priority>WARNING</priority>
+                                </trigger_prototype>
+                                <trigger_prototype>
+                                    <expression>{last()}>2</expression>
+                                    <name>Smart Array: SSD {#PD} Wear is more than {ITEM.LASTVALUE} on {HOSTNAME}</name>
+                                    <priority>HIGH</priority>
+                                </trigger_prototype>
+                            </trigger_prototypes>
+                        </item_prototype>
+                    </item_prototypes>
+                </discovery_rule>
+            </discovery_rules>
+            <macros>
+                <macro>
+                    <macro>{$ZABBIX_SSH_PASS}</macro>
+                    <value>zabbixPassword</value>
+                </macro>
+                <macro>
+                    <macro>{$ZABBIX_SSH_USER}</macro>
+                    <value>zabbixUsername</value>
+                </macro>
+            </macros>
+        </template>
+    </templates>
+</zabbix_export>
