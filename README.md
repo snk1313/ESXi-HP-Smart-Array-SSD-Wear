@@ -7,6 +7,7 @@ Check SSD datasheet for TBW, import template, change trigger values and interval
 For best performance without random errors in Latest Data it will be better to set interval for Data Retrieval different from Physical Drives Discovery and Item prototypes.
 
 
+
 Tested on:
 - HPE ProLiant G8, 9 and 10 series servers with HP branded RAID controllers (200 series not included).
 - ESXi 7 and 8. Sure it will work on older versions of ESXi.
